@@ -12,6 +12,13 @@ class Camera:
         self.y = target_y - SCREEN_HEIGHT // 2
 
 
+def ui_mouse_pos():
+    """Mouse position mapped into game-canvas coordinates (handles fullscreen scaling)."""
+    mx, my = pygame.mouse.get_pos()
+    s = VIEW["scale"]
+    return ((mx - VIEW["ox"]) / s, (my - VIEW["oy"]) / s)
+
+
 def draw_hud(surface, player, game_time, font_small, font_med, font_large):
     # HP bar
     bar_x, bar_y = 16, 16
@@ -68,7 +75,7 @@ def draw_hud(surface, player, game_time, font_small, font_med, font_large):
     dash_x = wx + len(player.weapons) * 52 + 12
     dash_rect = (dash_x, wy, 48, 48)
     if player.dash_cooldown > 0:
-        ratio = 1.0 - player.dash_cooldown / DASH_COOLDOWN
+        ratio = 1.0 - player.dash_cooldown / player.dash_max_cooldown()
         pygame.draw.rect(surface, DARK_GRAY, dash_rect, border_radius=6)
         fill_h = int(48 * ratio)
         pygame.draw.rect(surface, CYAN, (dash_x, wy + 48 - fill_h, 48, fill_h), border_radius=6)
@@ -105,7 +112,7 @@ def draw_upgrade_screen(surface, player, choices, font_med, font_small, font_lar
     start_x = (SCREEN_WIDTH - total_w) // 2
     start_y = 220
 
-    mouse_pos = pygame.mouse.get_pos()
+    mouse_pos = ui_mouse_pos()
     hovered = -1
 
     for i, choice in enumerate(choices):
@@ -141,9 +148,11 @@ def draw_upgrade_screen(surface, player, choices, font_med, font_small, font_lar
 
         # Level
         if choice.get("is_new"):
-            level_text = font_small.render("NEW WEAPON", True, GREEN)
+            new_label = choice.get("new_label", "NEW WEAPON")
+            level_text = font_small.render(new_label, True, GREEN)
         else:
-            level_text = font_small.render(f"Level {choice['current_level']} -> {choice['new_level']}", True, YELLOW)
+            label = choice.get("level_label", "Level")
+            level_text = font_small.render(f"{label} {choice['current_level']} -> {choice['new_level']}", True, YELLOW)
         surface.blit(level_text, (bx + 12, by + 40))
 
         # Description (wrapped)
@@ -175,41 +184,97 @@ def draw_upgrade_screen(surface, player, choices, font_med, font_small, font_lar
     return hovered
 
 
+def draw_button(surface, rect, label, font, color, hovered):
+    bg = (60, 60, 80) if not hovered else (80, 80, 120)
+    pygame.draw.rect(surface, bg, rect, border_radius=10)
+    pygame.draw.rect(surface, color if hovered else GRAY, rect, 3 if hovered else 2, border_radius=10)
+    text = font.render(label, True, color if hovered else WHITE)
+    surface.blit(text, text.get_rect(center=rect.center))
+
+
 def draw_title_screen(surface, font_large, font_med, font_small):
     surface.fill(DARK_BG)
 
     # Title
     title = font_large.render("VAMPIRE SURVIVORS", True, RED)
-    title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 200))
+    title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 150))
     surface.blit(title, title_rect)
 
     sub = font_med.render("Python Edition", True, ORANGE)
-    sub_rect = sub.get_rect(center=(SCREEN_WIDTH // 2, 250))
+    sub_rect = sub.get_rect(center=(SCREEN_WIDTH // 2, 200))
     surface.blit(sub, sub_rect)
 
     # Instructions
     lines = [
         "WASD / Arrow Keys - Move",
-        "Spacebar - Dash (brief invincibility)",
+        "Spacebar - Dash (7.5s cooldown, brief invincibility)",
         "Weapons fire automatically",
         "Collect green XP gems from enemies",
         "Level up to choose upgrades",
         "",
         "Survive as long as you can!",
     ]
-    y = 340
+    y = 280
     for line in lines:
         text = font_small.render(line, True, LIGHT_GRAY)
         rect = text.get_rect(center=(SCREEN_WIDTH // 2, y))
         surface.blit(text, rect)
         y += 30
 
-    # Start
-    pulse = abs((pygame.time.get_ticks() % 1500) - 750) / 750
-    start_color = tuple(int(255 * (0.5 + 0.5 * pulse)) for _ in range(3))
-    start_text = font_large.render("CLICK TO START", True, start_color)
-    start_rect = start_text.get_rect(center=(SCREEN_WIDTH // 2, 600))
-    surface.blit(start_text, start_rect)
+    # Buttons
+    mouse_pos = ui_mouse_pos()
+    hovered = None
+
+    start_rect = pygame.Rect(SCREEN_WIDTH // 2 - 140, 520, 280, 60)
+    settings_rect = pygame.Rect(SCREEN_WIDTH // 2 - 140, 595, 280, 60)
+
+    if start_rect.collidepoint(mouse_pos):
+        hovered = "start"
+    elif settings_rect.collidepoint(mouse_pos):
+        hovered = "settings"
+
+    draw_button(surface, start_rect, "START GAME", font_med, GREEN, hovered == "start")
+    draw_button(surface, settings_rect, "SETTINGS", font_med, CYAN, hovered == "settings")
+
+    return hovered
+
+
+def draw_settings_screen(surface, game_settings, font_large, font_med, font_small):
+    surface.fill(DARK_BG)
+
+    title = font_large.render("SETTINGS", True, WHITE)
+    title_rect = title.get_rect(center=(SCREEN_WIDTH // 2, 130))
+    surface.blit(title, title_rect)
+
+    mouse_pos = ui_mouse_pos()
+    hovered = None
+
+    options = [
+        ("fullscreen", "Fullscreen"),
+        ("particles", "Particles"),
+        ("damage_numbers", "Damage Numbers"),
+    ]
+    start_y = 230
+    row_h = 60
+    gap = 15
+    for i, (key, label) in enumerate(options):
+        ry = start_y + i * (row_h + gap)
+        rect = pygame.Rect(SCREEN_WIDTH // 2 - 200, ry, 400, row_h)
+        if rect.collidepoint(mouse_pos):
+            hovered = f"toggle:{key}"
+        state = "ON" if game_settings[key] else "OFF"
+        color = GREEN if game_settings[key] else RED
+        draw_button(surface, rect, f"{label}: {state}", font_med, color, hovered == f"toggle:{key}")
+
+    back_rect = pygame.Rect(
+        SCREEN_WIDTH // 2 - 140,
+        start_y + len(options) * (row_h + gap) + 30, 280, 60,
+    )
+    if back_rect.collidepoint(mouse_pos):
+        hovered = "back"
+    draw_button(surface, back_rect, "BACK", font_med, YELLOW, hovered == "back")
+
+    return hovered
 
 
 def draw_difficulty_screen(surface, font_large, font_med, font_small):
@@ -227,7 +292,7 @@ def draw_difficulty_screen(surface, font_large, font_med, font_small):
     start_x = (SCREEN_WIDTH - total_w) // 2
     start_y = 250
 
-    mouse_pos = pygame.mouse.get_pos()
+    mouse_pos = ui_mouse_pos()
     hovered_key = None
 
     for i, key in enumerate(keys):

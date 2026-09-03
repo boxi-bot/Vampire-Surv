@@ -17,14 +17,14 @@ WEAPON_DEFS = {
         "level_scale": 1.4,
     },
     "fire": {
-        "name": "Fire Circle",
+        "name": "Ring Of Fire",
         "color": ORANGE,
         "damage": 8,
         "cooldown": 1.2,
         "speed": 0,
         "size": 60,
         "pierce": 999,
-        "description": "Periodic fire burst around you",
+        "description": "Orbiting ring of fire that burns on contact",
         "level_scale": 1.3,
     },
     "axe": {
@@ -60,6 +60,19 @@ WEAPON_DEFS = {
         "description": "Orbiting shield that damages on contact",
         "level_scale": 1.35,
     },
+    "wreck": {
+        "name": "Wrecking Ball",
+        "color": BROWN,
+        "damage": 25,
+        "cooldown": 6.0,
+        "speed": 170,
+        "size": 16,
+        "pierce": 3,
+        "fixed_dir": (0, -1),
+        "above_bonus": 1.5,
+        "description": "Slow heavy ball fired upward, +50% damage to enemies above you",
+        "level_scale": 1.4,
+    },
 }
 
 
@@ -74,6 +87,7 @@ class Projectile:
         self.size = weapon_def["size"]
         self.pierce = weapon_def["pierce"]
         self.color = weapon_def["color"]
+        self.above_bonus = weapon_def.get("above_bonus", 1.0)
         self.alive = True
         self.enemies_hit = set()
         self.lifetime = 3.0
@@ -109,9 +123,36 @@ class Orbiter:
         self.orbit_speed = 2.0
         self.angle = 0
         self.hit_cooldowns = {}
+        self.frames = []
+        self.anim_timer = 0.0
+        self.frame_idx = 0
+        if weapon_key == "fire":
+            self._load_fire_frames()
+
+    def _load_fire_frames(self):
+        try:
+            sheet = pygame.image.load(FIRE_SPRITE).convert_alpha()
+        except Exception:
+            return
+        for r in range(FIRE_ROWS):
+            for c in range(FIRE_COLS):
+                rect = pygame.Rect(
+                    c * FIRE_CELL, r * FIRE_CELL, FIRE_CELL, FIRE_CELL
+                )
+                frame = pygame.transform.scale(
+                    sheet.subsurface(rect),
+                    (FIRE_DISPLAY_SIZE, FIRE_DISPLAY_SIZE),
+                )
+                self.frames.append(frame)
 
     def update(self, dt, player_x, player_y):
         self.angle += self.orbit_speed * dt
+        # Animate fire frames
+        if self.frames:
+            self.anim_timer += dt
+            if self.anim_timer >= FIRE_ANIM_SPEED:
+                self.anim_timer -= FIRE_ANIM_SPEED
+                self.frame_idx = (self.frame_idx + 1) % len(self.frames)
         # Clean expired cooldowns
         to_remove = [k for k, v in self.hit_cooldowns.items() if v <= 0]
         for k in to_remove:
@@ -132,8 +173,16 @@ class Orbiter:
         for ox, oy in self.get_positions(player_x, player_y, count):
             sx = ox - camera_x
             sy = oy - camera_y
-            pygame.draw.circle(surface, self.color, (int(sx), int(sy)), 8)
-            pygame.draw.circle(surface, WHITE, (int(sx), int(sy)), 4)
+            if self.frames:
+                frame = self.frames[self.frame_idx % len(self.frames)]
+                surface.blit(
+                    frame,
+                    (int(sx) - FIRE_DISPLAY_SIZE // 2,
+                     int(sy) - FIRE_DISPLAY_SIZE // 2),
+                )
+            else:
+                pygame.draw.circle(surface, self.color, (int(sx), int(sy)), 8)
+                pygame.draw.circle(surface, WHITE, (int(sx), int(sy)), 4)
 
 
 class Weapon:
@@ -157,6 +206,14 @@ class Weapon:
             return []
 
         self.cooldown_timer = self.defs["cooldown"]
+
+        # Fixed-direction weapons (e.g. Wrecking Ball fires straight up)
+        fixed = self.defs.get("fixed_dir")
+        if fixed is not None:
+            dx, dy = fixed
+            proj = Projectile(player_x, player_y, dx, dy, self.defs, self.level)
+            projectiles.append(proj)
+            return [proj]
 
         # Find nearest enemy
         nearest = None
